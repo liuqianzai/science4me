@@ -75,10 +75,9 @@ def main():
             workspace_root=args.workspace,
             config_path=args.config
         )
-        session.stage_ideation()
-        session.stage_planning()
-        if session.stage_coding_and_execution():
-            session.stage_analysis_and_decision()
+        session.stage_goal_and_architecture()
+        session.stage_experiment_planning()
+        session.run_evolution_loop()
         return
 
     # 1. 初始化实验运行目录

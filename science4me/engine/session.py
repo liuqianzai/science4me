@@ -9,239 +9,250 @@ from rich.prompt import Prompt, Confirm
 from rich.table import Table
 
 from science4me.engine.llm import LLMClient
-from science4me.engine.state import ResearchState
-from science4me.agents.ideation import IdeationAgent
-from science4me.agents.planner import PlannerAgent
-from science4me.agents.coder import CoderAgent
-from science4me.agents.visualizer import VisualizerAgent
-from science4me.tools.sandbox import SandboxExecutor
-from science4me.tools.exporter import ResearchExporter
+from science4me.engine.evolution_log import EvolutionHistoryManager
+from science4me.agents.goal_architecture import GoalArchitectureAgent
+from science4me.agents.experiment_planner import ExperimentPlannerAgent
+from science4me.agents.execution_training import ExecutionTrainingAgent
+from science4me.agents.optimization_diagnosis import OptimizationDiagnosisAgent
 
 console = Console(highlight=False)
 
 
 class ResearchSession:
     """
-    人机协同 (Human-in-the-Loop) 交互式科研副驾驶会话控制器
-    分阶段执行：每一步输出方案，交由研究者审查、微调或授权后推进
+    第一阶段核心：架构自主演进与实验训练人机协同控制器
+    驱动 4 大智能体协作闭环：
+    Agent 1 (目标架构) -> Agent 2 (方案规划) -> Loop [ Agent 3 (训练执行) -> Agent 4 (诊断优化与停滞突围) ]
     """
 
     def __init__(self, topic: str, workspace_root: str = "workspaces", config_path: str = "configs/config.yaml"):
-        self.topic = topic
+        self.user_topic = topic
         self.timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         self.run_id = f"run_{self.timestamp}"
         self.work_dir = os.path.abspath(os.path.join(workspace_root, self.run_id))
         os.makedirs(self.work_dir, exist_ok=True)
 
         self.llm = LLMClient(config_path)
-        self.ideation_agent = IdeationAgent(self.llm)
-        self.planner_agent = PlannerAgent(self.llm)
-        self.coder_agent = CoderAgent(self.llm)
-        self.visualizer_agent = VisualizerAgent()
+        self.evolution_mgr = EvolutionHistoryManager(self.work_dir)
 
-        self.state: ResearchState = {
-            "topic": topic,
-            "run_id": self.run_id,
-            "work_dir": self.work_dir,
-            "status": "initialized",
-            "papers": [],
-            "idea": {},
-            "experiment_plan": {},
-            "code_script": "",
-            "execution_logs": "",
-            "execution_success": False,
-            "error_traceback": "",
-            "retry_count": 0,
-            "metrics": {},
-            "plots": [],
-            "latex_tables": [],
-            "paper_sections": {},
-            "paper_bibtex": "",
-            "paper_markdown": "",
-            "paper_latex": "",
-            "review": {},
-            "revision_count": 0
-        }
+        # 初始化第一阶段四大智能体
+        self.agent1_goal = GoalArchitectureAgent(self.llm)
+        self.agent2_plan = ExperimentPlannerAgent(self.llm)
+        self.agent3_train = ExecutionTrainingAgent(self.llm)
+        self.agent4_diag = OptimizationDiagnosisAgent(self.llm)
 
-    # ==================== 阶段 1：选题与假说梳理 ====================
-    def stage_ideation(self) -> Dict[str, Any]:
+        # 会话运行状态
+        self.generation = 1
+        self.goal_data: Dict[str, Any] = {}
+        self.current_plan: Dict[str, Any] = {}
+        self.current_architecture: Dict[str, Any] = {}
+        self.changes_description: str = "初始代基础架构"
+
+    # ==================== 智能体 1：选题、目标设定与架构规划 ====================
+    def stage_goal_and_architecture(self) -> Dict[str, Any]:
         console.print(Panel(
-            f"[bold cyan]正在为课题进行文献调研与假说发散...[/bold cyan]\n课题方向: [yellow]{self.topic}[/yellow]",
-            title="[bold green]阶段 1 / 4：选题与文献调研[/bold green]"
+            f"[bold cyan]正在查阅前沿文献，确立科研课题、停止目标与架构演进路线...[/bold cyan]\n"
+            f"输入方向: [yellow]{self.user_topic}[/yellow]",
+            title="[bold green]智能体 1：选题与目标架构规划 (GoalArchitectureAgent)[/bold green]"
         ))
 
-        res = self.ideation_agent.run(self.topic, max_papers=5)
-        self.state["papers"] = res["papers"]
-        idea = res["idea"]
-        self.state["idea"] = idea
+        res = self.agent1_goal.run(self.user_topic)
+        self.goal_data = res
+        self.current_architecture = res.get("initial_architecture", {})
 
-        # 展示文献
-        console.print(f"\n[bold]检索到 {len(res['papers'])} 篇相关前沿论文:[/bold]")
-        for idx, p in enumerate(res["papers"][:3], 1):
+        papers = res.get("papers", [])
+        target = res.get("target_goal", {})
+        evo = res.get("evolution_strategy", [])
+
+        # 呈现检索文献
+        console.print(f"\n[bold]检索到 {len(papers)} 篇相关前沿论文:[/bold]")
+        for idx, p in enumerate(papers[:3], 1):
             console.print(f"  {idx}. [cyan]{p.get('title')}[/cyan] ({p.get('published')})")
 
-        # 呈现待审核假说
-        rqs = "\n".join([f"    - {rq}" for rq in idea.get("research_questions", [])])
+        # 呈现演进路线
+        evo_lines = "\n".join([f"    - 代际 {item.get('generation')}: [cyan]{item.get('architecture')}[/cyan] ({item.get('focus')})" for item in evo])
+
         console.print(Panel(
-            f"[bold]拟定论文标题:[/bold] {idea.get('proposed_title')}\n\n"
-            f"[bold]研究动机 (Motivation):[/bold]\n  {idea.get('motivation')}\n\n"
-            f"[bold]核心假说与方法 (Proposed Method):[/bold]\n  {idea.get('proposed_method')}\n\n"
-            f"[bold]核心研究问题 (RQs):[/bold]\n{rqs}",
-            title="[bold yellow]★ 人工门禁 1：假说方案审查[/bold yellow]"
+            f"[bold]确立课题:[/bold] {res.get('topic')}\n\n"
+            f"[bold red]★ 最终量化停止目标:[/bold red] {target.get('description')} "
+            f"({target.get('metric')} {target.get('condition')} {target.get('threshold')})\n\n"
+            f"[bold]初始代架构 (Gen 1):[/bold] {self.current_architecture.get('name')}\n"
+            f"  - 核心机制: {self.current_architecture.get('core_mechanisms')}\n"
+            f"  - 设计动机: {self.current_architecture.get('design_rationale')}\n\n"
+            f"[bold]预期架构演进路线:[/bold]\n{evo_lines}",
+            title="[bold yellow]★ 人工审核门禁 1：课题、停止目标与架构审查[/bold yellow]"
         ))
 
         choice = Prompt.ask(
-            "\n请做出决策",
-            choices=["确认通过", "修改假说", "重新发散"],
+            "\n请做出审核决策",
+            choices=["确认通过", "修改目标与架构", "重新发散"],
             default="确认通过"
         )
 
-        if choice == "修改假说":
-            user_title = Prompt.ask("请输入自定义的修改标题 (回车沿用原标题)", default=idea.get("proposed_title"))
-            user_method = Prompt.ask("请输入对创新方法的调整说明 (回车沿用原方案)", default=idea.get("proposed_method"))
-            self.state["idea"]["proposed_title"] = user_title
-            self.state["idea"]["proposed_method"] = user_method
-            console.print("[green]已更新您的自定义假说设置！[/green]")
+        if choice == "修改目标与架构":
+            new_title = Prompt.ask("自定义课题名称 (回车沿用)", default=res.get("topic"))
+            new_target = Prompt.ask("自定义停止准确率阈值 (0.0~1.0)", default=str(target.get("threshold", 0.95)))
+            self.goal_data["topic"] = new_title
+            self.goal_data["target_goal"]["threshold"] = float(new_target)
+            console.print("[green]课题与最终停止目标已更新！[/green]")
         elif choice == "重新发散":
-            new_prompt = Prompt.ask("请输入进一步细化的选题提示词", default=self.topic)
-            self.topic = new_prompt
-            return self.stage_ideation()
+            self.user_topic = Prompt.ask("输入新的探索方向关键词", default=self.user_topic)
+            return self.stage_goal_and_architecture()
 
-        return self.state["idea"]
+        return self.goal_data
 
-    # ==================== 阶段 2：实验方案设计 ====================
-    def stage_planning(self) -> Dict[str, Any]:
+    # ==================== 智能体 2：实验方案设计 ====================
+    def stage_experiment_planning(self) -> Dict[str, Any]:
         console.print(Panel(
-            "[bold cyan]正在根据确认的假说设计实验方案、对照基线与消融实验...[/bold cyan]",
-            title="[bold green]阶段 2 / 4：实验方案规划[/bold green]"
+            "[bold cyan]正在结合文献、选题与目标制定具体实验评测方案...[/bold cyan]",
+            title="[bold green]智能体 2：实验方案规划 (ExperimentPlannerAgent)[/bold green]"
         ))
 
-        plan = self.planner_agent.run(self.state["idea"])
-        self.state["experiment_plan"] = plan
+        plan = self.agent2_plan.run(
+            topic=self.goal_data.get("topic", self.user_topic),
+            target_goal=self.goal_data.get("target_goal", {}),
+            architecture_spec=self.current_architecture
+        )
+        self.current_plan = plan
 
         baselines_text = ", ".join([b.get("name") for b in plan.get("baselines", [])])
-        ablations_text = ", ".join([a.get("name") for a in plan.get("ablations", [])])
         hyp = plan.get("hyperparameters", {})
 
         console.print(Panel(
-            f"[bold]评测基准任务:[/bold] {plan.get('benchmark_task')}\n"
-            f"[bold]数据集类型:[/bold] {plan.get('dataset_source')}\n"
-            f"[bold]对比基线模型:[/bold] {baselines_text}\n"
-            f"[bold]消融实验分支:[/bold] {ablations_text}\n"
+            f"[bold]任务描述:[/bold] {plan.get('task_description')}\n"
+            f"[bold]对比基准模型:[/bold] {baselines_text}\n"
+            f"[bold]当前代待测架构:[/bold] {self.current_architecture.get('name')}\n"
             f"[bold]评价指标:[/bold] {', '.join(plan.get('evaluation_metrics', []))}\n"
+            f"[bold]硬件偏好:[/bold] {hyp.get('device_preference')} (自动检测 CUDA)\n"
             f"[bold]默认超参数:[/bold] Epochs={hyp.get('epochs')}, BatchSize={hyp.get('batch_size')}, LR={hyp.get('learning_rate')}",
-            title="[bold yellow]★ 人工门禁 2：实验方案与参数审查[/bold yellow]"
+            title="[bold yellow]★ 人工审核门禁 2：实验方案与硬件参数审查[/bold yellow]"
         ))
 
-        if Confirm.ask("是否需要调整超参数？", default=False):
+        if Confirm.ask("是否需要调整训练超参数？", default=False):
             epochs = Prompt.ask("训练轮次 (Epochs)", default=str(hyp.get("epochs", 15)))
             lr = Prompt.ask("学习率 (Learning Rate)", default=str(hyp.get("learning_rate", 0.002)))
-            self.state["experiment_plan"]["hyperparameters"]["epochs"] = int(epochs)
-            self.state["experiment_plan"]["hyperparameters"]["learning_rate"] = float(lr)
-            console.print("[green]超参数已更新！[/green]")
+            self.current_plan["hyperparameters"]["epochs"] = int(epochs)
+            self.current_plan["hyperparameters"]["learning_rate"] = float(lr)
+            console.print("[green]超参数已调整完毕！[/green]")
 
-        return self.state["experiment_plan"]
+        return self.current_plan
 
-    # ==================== 阶段 3：代码编写与沙箱验证 ====================
-    def stage_coding_and_execution(self) -> bool:
-        console.print(Panel(
-            "[bold cyan]正在编写自包含 PyTorch 实验代码并设置数据流...[/bold cyan]",
-            title="[bold green]阶段 3 / 4：代码编写与沙箱运行[/bold green]"
-        ))
+    # ==================== 智能体 3 与 4：演进优化循环 ====================
+    def run_evolution_loop(self, max_generations: int = 5):
+        """执行 Agent 3 (训练与持久化) 与 Agent 4 (诊断与演进) 闭环迭代"""
+        target_goal = self.goal_data.get("target_goal", {})
 
-        code = self.coder_agent.generate_code(self.state["idea"], self.state["experiment_plan"])
-        self.state["code_script"] = code
-
-        script_path = os.path.join(self.work_dir, "experiment.py")
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(code)
-
-        console.print(f"[cyan]实验脚本已生成在:[/cyan] {script_path}")
-        console.print(f"[dim]代码体积: {len(code.splitlines())} 行 | 涵盖所有 Baseline、Proposed Model 与 Ablation 分支[/dim]")
-
-        # 人工审查门禁
-        if not Confirm.ask("\n代码审查完成，是否授权启动本地沙箱运行该实验？", default=True):
-            console.print("[yellow]已暂停执行。您可以手动编辑 experiment.py 后再继续推进。[/yellow]")
-            return False
-
-        console.print("\n[bold magenta]>> 正在沙箱中启动实验训练...[/bold magenta]")
-        success, logs, metrics, error_tb = SandboxExecutor.run_script(
-            code=code,
-            work_dir=self.work_dir,
-            timeout_seconds=300
-        )
-
-        self.state["execution_success"] = success
-        self.state["execution_logs"] = logs
-        self.state["metrics"] = metrics
-        self.state["error_traceback"] = error_tb
-
-        if success:
-            console.print("[bold green][OK] 实验执行成功！所有模型均已完成收敛并输出指标数据。[/bold green]")
-        else:
-            console.print(f"[bold red][FAIL] 实验报错:[/bold red] {error_tb}")
-            if Confirm.ask("是否启用 AI 自愈调试器自动修复代码并重跑？", default=True):
-                fixed_code = self.coder_agent.fix_code(code, error_tb, self.state["experiment_plan"])
-                self.state["code_script"] = fixed_code
-                return self.stage_coding_and_execution()
-
-        return success
-
-    # ==================== 阶段 4：数据分析与决策复盘 ====================
-    def stage_analysis_and_decision(self):
-        console.print(Panel(
-            "[bold cyan]正在解析训练轨迹、绘制学术图表并计算统计对比...[/bold cyan]",
-            title="[bold green]阶段 4 / 4：数据分析与决策复盘[/bold green]"
-        ))
-
-        plots, tables = self.visualizer_agent.run(self.state["metrics"], self.work_dir)
-        self.state["plots"] = plots
-        self.state["latex_tables"] = tables
-
-        results = self.state["metrics"].get("results", {})
-        if results:
-            table = Table(title="实验量化评测对比看板", show_header=True, header_style="bold cyan")
-            table.add_column("模型名称", style="dim")
-            table.add_column("测试准确率 (Accuracy)", justify="right")
-            table.add_column("测试损失 (Loss)", justify="right")
-            table.add_column("训练耗时 (s)", justify="right")
-
-            for name, m in results.items():
-                acc = f"{m.get('test_accuracy', 0)*100:.2f}%"
-                loss = f"{m.get('test_loss', 0):.4f}"
-                t = f"{m.get('training_time_sec', 0):.2f}"
-                table.add_row(name, acc, loss, t)
-            console.print("\n", table)
-
-        console.print(f"\n[cyan]生成的科研矢量图表:[/cyan]")
-        for p in plots:
-            console.print(f"  - {os.path.join(self.work_dir, p)}")
-
-        # 决策门禁
-        choice = Prompt.ask(
-            "\n★ 人工门禁 4：实验结论与后续决策",
-            choices=["导出成果报告", "调整参数再测", "追加新消融实验"],
-            default="导出成果报告"
-        )
-
-        if choice == "导出成果报告":
-            ResearchExporter.export_all(
-                work_dir=self.work_dir,
-                paper_markdown=f"# {self.state['idea'].get('proposed_title')}\n\n## 实验结果\n{json.dumps(results, indent=2)}",
-                paper_latex="",
-                paper_bibtex="",
-                metrics=self.state["metrics"],
-                review={"decision": "Accepted by Researcher"},
-                plots=plots
-            )
+        while self.generation <= max_generations:
             console.print(Panel(
-                f"[bold green]实验闭环圆满完成！[/bold green]\n"
-                f"产物工作区: {self.work_dir}\n"
-                f"核心指标文件: {os.path.join(self.work_dir, 'metrics.json')}\n"
-                f"成果图表目录: {os.path.join(self.work_dir, 'figures')}",
-                title="[bold green]科研阶段总结[/bold green]"
+                f"[bold magenta]>> 启动第 {self.generation} 代架构实验与模型训练...[/bold magenta]\n"
+                f"当前架构: [cyan]{self.current_architecture.get('name')}[/cyan]\n"
+                f"架构说明: {self.current_architecture.get('core_mechanisms')}\n"
+                f"演进变更: {self.changes_description}",
+                title=f"[bold green]智能体 3：代码执行与训练 (Gen {self.generation})[/bold green]"
             ))
-        elif choice == "调整参数再测":
-            self.stage_planning()
-            self.stage_coding_and_execution()
-            self.stage_analysis_and_decision()
+
+            # 1. 智能体 3：生成代码、沙箱执行并持久化记录
+            success, metrics, logs = self.agent3_train.generate_and_train(
+                generation=self.generation,
+                architecture_spec=self.current_architecture,
+                experiment_plan=self.current_plan,
+                work_dir=self.work_dir,
+                evolution_mgr=self.evolution_mgr,
+                target_goal=target_goal,
+                changes_description=self.changes_description
+            )
+
+            if not success:
+                console.print(f"[bold red]第 {self.generation} 代训练脚本执行异常，请检查代码或环境。[/bold red]")
+                if not Confirm.ask("是否继续重试？", default=True):
+                    break
+
+            # 呈现本代指标对比
+            results = metrics.get("results", {})
+            if results:
+                table = Table(title=f"第 {self.generation} 代模型量化评测结果", show_header=True, header_style="bold cyan")
+                table.add_column("模型名称", style="dim")
+                table.add_column("测试准确率 (Accuracy)", justify="right")
+                table.add_column("测试损失 (Loss)", justify="right")
+                table.add_column("训练耗时 (s)", justify="right")
+                for name, m in results.items():
+                    acc = f"{m.get('test_accuracy', 0)*100:.2f}%"
+                    loss = f"{m.get('test_loss', 0):.4f}"
+                    t = f"{m.get('training_time_sec', 0):.2f}"
+                    table.add_row(name, acc, loss, t)
+                console.print(table)
+
+            console.print(f"[dim]演进历史已持久化至: {self.evolution_mgr.log_file}[/dim]\n")
+
+            # 2. 智能体 4：模型缺陷诊断与演进优化
+            console.print(Panel(
+                f"[bold cyan]正在诊断第 {self.generation} 代模型缺陷并评估演进方案...[/bold cyan]",
+                title=f"[bold green]智能体 4：模型诊断与演进优化 (OptimizationDiagnosisAgent)[/bold green]"
+            ))
+
+            diagnosis = self.agent4_diag.run(
+                current_generation=self.generation,
+                metrics=metrics,
+                evolution_mgr=self.evolution_mgr,
+                target_goal=target_goal
+            )
+
+            # 检查是否达成最终目标 (停止条件)
+            if diagnosis.get("target_achieved"):
+                console.print(Panel(
+                    f"[bold green]恭喜！模型已达成设定的最终量化目标！[/bold green]\n\n"
+                    f"最终指标: [bold cyan]{target_goal.get('metric')} = {diagnosis.get('current_metric_value')*100:.2f}%[/bold cyan] "
+                    f"(目标要求: {target_goal.get('condition')} {target_goal.get('threshold')*100:.2f}%)\n"
+                    f"优胜架构: [yellow]{self.current_architecture.get('name')}[/yellow]\n"
+                    f"演进代数: 共历经 {self.generation} 代演进\n"
+                    f"全量演进历史: {self.evolution_mgr.log_file}",
+                    title="[bold green]★ 科研目标顺利达成 (Stopping Target Achieved)[/bold green]"
+                ))
+                break
+
+            # 若未达标，呈现缺陷分析与下一步方案
+            flaws_text = "\n".join([f"    - {f}" for f in diagnosis.get("model_flaws", [])])
+            is_stagnant = diagnosis.get("is_stagnant", False)
+            next_arch = diagnosis.get("next_architecture", {})
+
+            stagnant_warning = ""
+            if is_stagnant:
+                stagnant_warning = "\n[bold red]【停滞突围机制触发】：检测到近期实验指标未有明显提升，系统已生成跳脱局部的重构方案！[/bold red]\n"
+
+            console.print(Panel(
+                f"当前指标: {target_goal.get('metric')} = {diagnosis.get('current_metric_value')*100:.2f}% "
+                f"(距离最终目标 {target_goal.get('threshold')*100:.2f}% 尚有差距)\n"
+                f"{stagnant_warning}\n"
+                f"[bold]诊断出的模型缺陷:[/bold]\n{flaws_text}\n\n"
+                f"[bold]瓶颈深度分析:[/bold]\n  {diagnosis.get('bottleneck_analysis')}\n\n"
+                f"[bold]拟建议的第 {self.generation + 1} 代演进架构:[/bold] [yellow]{next_arch.get('name')}[/yellow]\n"
+                f"  - 核心机制: {next_arch.get('core_mechanisms')}\n"
+                f"  - 设计依据: {next_arch.get('design_rationale')}\n"
+                f"  - 相较上一代变更: {next_arch.get('changes_from_previous')}",
+                title=f"[bold yellow]★ 人工审核门禁 3：第 {self.generation} 代缺陷诊断与下一代方案审查[/bold yellow]"
+            ))
+
+            choice = Prompt.ask(
+                "\n请做出审核决策",
+                choices=["批准演进并训练下一代", "调整改进方案", "人工终止实验"],
+                default="批准演进并训练下一代"
+            )
+
+            if choice == "批准演进并训练下一代":
+                self.changes_description = next_arch.get("changes_from_previous", f"由 Gen{self.generation} 演进")
+                self.current_architecture = next_arch
+                self.generation += 1
+            elif choice == "调整改进方案":
+                custom_name = Prompt.ask("输入自定义架构名称", default=next_arch.get("name"))
+                custom_mech = Prompt.ask("输入自定义核心机制", default=next_arch.get("core_mechanisms"))
+                self.current_architecture = {
+                    "name": custom_name,
+                    "core_mechanisms": custom_mech,
+                    "design_rationale": "人工指导微调方案",
+                    "changes_from_previous": "人工指定架构变动"
+                }
+                self.changes_description = "人工指导微调方案"
+                self.generation += 1
+            else:
+                console.print("[yellow]已由研究者人工终止实验闭环。[/yellow]")
+                break

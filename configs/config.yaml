@@ -1,0 +1,17 @@
+llm:
+  # 支持任何兼容 OpenAI 接口的模型，如 OpenAI, DeepSeek, Qwen, Moonshot, Ollama, vLLM 等
+  api_key: ""
+  base_url: "https://api.openai.com/v1"
+  model: "gpt-4o"
+  temperature: 0.7
+
+research:
+  max_retries: 3              # 代码执行报错自愈重试最大次数
+  timeout_seconds: 300        # 单次实验脚本运行超时时间（秒）
+  max_papers_search: 6        # ArXiv 检索文献数量
+  acceptance_threshold: 7.0   # 模拟评审通过基准分（满分 10 分）
+  max_revisions: 2            # 论文评审不通过时最大修改轮数
+
+paths:
+  workspace_dir: "workspaces" # 实验产物根目录
+  template_dir: "science4me/templates"

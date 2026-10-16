@@ -1,5 +1,4 @@
 import os
-import uuid
 from typing import Any, Dict, List, Optional
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -14,7 +13,7 @@ app = FastAPI(
     version="0.1.0"
 )
 
-# 允许跨域（方便前端 Vue/React 项目调用）
+# 允许跨域
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -25,6 +24,41 @@ app.add_middleware(
 
 # 内存会话管理池
 sessions: Dict[str, ResearchSession] = {}
+
+
+def auto_restore_sessions(workspace_root: str = "workspaces"):
+    """服务启动或请求时自动扫描工作区目录，恢复历史 session_state.json 会话"""
+    if not os.path.exists(workspace_root):
+        return
+    for dirname in os.listdir(workspace_root):
+        dirpath = os.path.join(workspace_root, dirname)
+        state_file = os.path.join(dirpath, "session_state.json")
+        if os.path.isdir(dirpath) and os.path.exists(state_file):
+            if dirname not in sessions:
+                try:
+                    s = ResearchSession.resume(dirpath)
+                    sessions[s.run_id] = s
+                except Exception as ex:
+                    print(f"[WARN] Failed to auto-resume {dirpath}: {ex}")
+
+
+# 初始加载已有会话
+auto_restore_sessions()
+
+
+def get_or_resume_session(session_id: str) -> ResearchSession:
+    """优先从内存获取，不存在则尝试从磁盘断点恢复"""
+    if session_id in sessions:
+        return sessions[session_id]
+
+    # 尝试按 session_id 目录恢复
+    dirpath = os.path.abspath(os.path.join("workspaces", session_id))
+    if os.path.isdir(dirpath) and os.path.exists(os.path.join(dirpath, "session_state.json")):
+        s = ResearchSession.resume(dirpath)
+        sessions[s.run_id] = s
+        return s
+
+    raise HTTPException(status_code=404, detail=f"科研会话未找到: {session_id}")
 
 
 # ==================== 请求与响应数据契约 ====================
@@ -56,6 +90,24 @@ def health_check():
     return {"status": "ok", "service": "Science4Me Backend"}
 
 
+@app.get("/api/sessions")
+def list_sessions():
+    """获取所有活跃及历史已恢复的科研会话列表"""
+    auto_restore_sessions()
+    items = []
+    for sid, s in sessions.items():
+        items.append({
+            "session_id": sid,
+            "topic": s.user_topic,
+            "generation": s.generation,
+            "status": getattr(s, "status", "active"),
+            "work_dir": s.work_dir,
+            "created_at": getattr(s, "timestamp", ""),
+            "target_goal": s.goal_data.get("target_goal", {})
+        })
+    return {"sessions": items}
+
+
 @app.post("/api/sessions/create")
 def create_session(req: CreateSessionRequest):
     """创建科研会话并触发智能体 1 (文献检索、停止目标与初始架构设计)"""
@@ -67,22 +119,36 @@ def create_session(req: CreateSessionRequest):
     goal_data = session.agent1_goal.run(session.user_topic)
     session.goal_data = goal_data
     session.current_architecture = goal_data.get("initial_architecture", {})
+    session.status = "awaiting_gate1"
+    session.save_state()
 
     return {
         "session_id": session_id,
         "work_dir": session.work_dir,
         "goal_data": goal_data,
         "current_architecture": session.current_architecture,
-        "status": "awaiting_gate1"
+        "status": session.status
+    }
+
+
+@app.post("/api/sessions/{session_id}/resume")
+def resume_session_endpoint(session_id: str):
+    """根据 session_id 显式重载恢复历史会话"""
+    session = get_or_resume_session(session_id)
+    return {
+        "session_id": session.run_id,
+        "status": session.status,
+        "generation": session.generation,
+        "goal_data": session.goal_data,
+        "current_plan": session.current_plan,
+        "current_architecture": session.current_architecture
     }
 
 
 @app.post("/api/sessions/{session_id}/gate1_review")
 def review_gate1(session_id: str, req: Gate1ReviewRequest):
     """人工审核门禁 1: 审查/微调假说与停止目标，通过后触发智能体 2 生成实验方案"""
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_resume_session(session_id)
 
     if req.action == "modify":
         if req.modified_topic:
@@ -95,6 +161,8 @@ def review_gate1(session_id: str, req: Gate1ReviewRequest):
         goal_data = session.agent1_goal.run(session.user_topic)
         session.goal_data = goal_data
         session.current_architecture = goal_data.get("initial_architecture", {})
+        session.status = "awaiting_gate1"
+        session.save_state()
         return {
             "session_id": session_id,
             "goal_data": goal_data,
@@ -109,6 +177,8 @@ def review_gate1(session_id: str, req: Gate1ReviewRequest):
         architecture_spec=session.current_architecture
     )
     session.current_plan = plan
+    session.status = "awaiting_gate2"
+    session.save_state()
 
     return {
         "session_id": session_id,
@@ -120,12 +190,13 @@ def review_gate1(session_id: str, req: Gate1ReviewRequest):
 @app.post("/api/sessions/{session_id}/gate2_review")
 def review_gate2(session_id: str, req: Gate2ReviewRequest):
     """人工审核门禁 2: 审查实验配置与硬件参数"""
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_resume_session(session_id)
 
     if req.action == "modify" and req.hyperparameters:
         session.current_plan["hyperparameters"].update(req.hyperparameters)
+
+    session.status = "ready_for_training"
+    session.save_state()
 
     return {
         "session_id": session_id,
@@ -136,10 +207,8 @@ def review_gate2(session_id: str, req: Gate2ReviewRequest):
 
 @app.post("/api/sessions/{session_id}/train_step")
 def run_train_step(session_id: str):
-    """触发智能体 3 (CUDA训练与持久化) + 智能体 4 (模型缺陷诊断与演进规划)"""
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    """触发智能体 3 (CUDA训练、最佳权重持久化) + 智能体 4 (模型缺陷诊断与演进规划)"""
+    session = get_or_resume_session(session_id)
 
     target_goal = session.goal_data.get("target_goal", {})
 
@@ -162,25 +231,29 @@ def run_train_step(session_id: str):
         target_goal=target_goal
     )
 
+    target_achieved = diagnosis.get("target_achieved", False)
+    session.status = "target_achieved" if target_achieved else "awaiting_gate3"
+    session.save_state()
+
     return {
         "session_id": session_id,
         "generation": session.generation,
         "execution_success": success,
         "metrics": metrics,
         "diagnosis": diagnosis,
-        "target_achieved": diagnosis.get("target_achieved", False),
-        "status": "target_achieved" if diagnosis.get("target_achieved") else "awaiting_gate3"
+        "target_achieved": target_achieved,
+        "status": session.status
     }
 
 
 @app.post("/api/sessions/{session_id}/gate3_review")
 def review_gate3(session_id: str, req: Gate3ReviewRequest):
     """人工审核门禁 3: 审查缺陷诊断与下一代演进方案"""
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_resume_session(session_id)
 
     if req.action == "terminate":
+        session.status = "terminated_by_user"
+        session.save_state()
         return {
             "session_id": session_id,
             "status": "terminated_by_user",
@@ -206,6 +279,8 @@ def review_gate3(session_id: str, req: Gate3ReviewRequest):
         session.current_architecture = next_arch
 
     session.generation += 1
+    session.status = "ready_for_training"
+    session.save_state()
 
     return {
         "session_id": session_id,
@@ -218,9 +293,7 @@ def review_gate3(session_id: str, req: Gate3ReviewRequest):
 @app.get("/api/sessions/{session_id}/history")
 def get_session_history(session_id: str):
     """获取指定科研会话的完整架构演进谱系记录"""
-    session = sessions.get(session_id)
-    if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+    session = get_or_resume_session(session_id)
 
     return {
         "session_id": session_id,

@@ -1,0 +1,996 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Science4Me 全自动科研与演进看板</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Vue 3 -->
+  <script src="https://unpkg.com/vue@3/dist/vue.global.prod.js"></script>
+  <!-- Chart.js -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <!-- Marked for Markdown Rendering -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <style>
+    /* 滚动条美化 */
+    ::-webkit-scrollbar { width: 6px; height: 6px; }
+    ::-webkit-scrollbar-track { background: #0f172a; }
+    ::-webkit-scrollbar-thumb { background: #334155; border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: #475569; }
+    .terminal-font { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+  </style>
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen flex flex-col font-sans">
+  <div id="app" class="flex flex-col flex-1">
+    
+    <!-- 顶部导航栏 -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-4 flex items-center justify-between sticky top-0 z-40 shadow-md">
+      <div class="flex items-center space-x-4">
+        <div class="h-9 w-9 rounded-lg bg-gradient-to-tr from-cyan-600 to-blue-500 flex items-center justify-center font-bold text-white shadow-lg text-lg">
+          S4M
+        </div>
+        <div>
+          <h1 class="text-lg font-bold tracking-tight text-white flex items-center gap-2">
+            Science4Me
+            <span class="text-xs font-normal text-cyan-400 bg-cyan-950/80 px-2 py-0.5 rounded border border-cyan-800/60">科研演进引擎</span>
+          </h1>
+          <p class="text-xs text-slate-400">基于多智能体协作与模型架构自主演进闭环</p>
+        </div>
+      </div>
+
+      <!-- 状态指示区 -->
+      <div class="flex items-center space-x-6">
+        <div class="flex items-center space-x-3 text-xs">
+          <span class="text-slate-400">实验状态:</span>
+          <span v-if="state.status === 'idle'" class="px-2.5 py-1 rounded-full bg-slate-800 text-slate-300 border border-slate-700">就绪空闲</span>
+          <span v-else-if="state.status === 'running'" class="px-2.5 py-1 rounded-full bg-blue-900/60 text-blue-300 border border-blue-700 animate-pulse">执行中 (第 {{ state.generation }} 代)</span>
+          <span v-else-if="state.status === 'waiting_gate'" class="px-2.5 py-1 rounded-full bg-amber-900/60 text-amber-300 border border-amber-700 font-medium animate-bounce">等待人机审核</span>
+          <span v-else-if="state.status === 'completed'" class="px-2.5 py-1 rounded-full bg-emerald-900/60 text-emerald-300 border border-emerald-700 font-medium">目标已达成</span>
+          <span v-else-if="state.status === 'terminated'" class="px-2.5 py-1 rounded-full bg-slate-800 text-rose-300 border border-rose-800">已终止</span>
+          <span v-else class="px-2.5 py-1 rounded-full bg-rose-900/60 text-rose-300 border border-rose-700">异常中断</span>
+        </div>
+
+        <div v-if="state.run_id" class="text-xs text-slate-400 border-l border-slate-800 pl-4">
+          运行标识: <span class="font-mono text-cyan-400">{{ state.run_id }}</span>
+        </div>
+
+        <!-- 全局操作按钮 (严格无符号纯文本) -->
+        <button 
+          v-if="state.status === 'running' || state.status === 'waiting_gate'" 
+          @click="stopExperiment"
+          class="bg-rose-900/80 hover:bg-rose-800 text-rose-100 text-xs px-3 py-1.5 rounded border border-rose-700 transition">
+          终止实验
+        </button>
+      </div>
+    </header>
+
+    <!-- 选项卡导航 -->
+    <div class="bg-slate-900/70 border-b border-slate-800 px-6 flex space-x-6 text-sm">
+      <button 
+        @click="activeTab = 'console'"
+        :class="activeTab === 'console' ? 'text-cyan-400 border-cyan-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+        class="py-3 font-medium border-b-2 transition">
+        实验台
+      </button>
+      <button 
+        @click="activeTab = 'evolution'"
+        :class="activeTab === 'evolution' ? 'text-cyan-400 border-cyan-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+        class="py-3 font-medium border-b-2 transition">
+        架构演进轨迹
+      </button>
+      <button 
+        @click="activeTab = 'artifacts'"
+        :class="activeTab === 'artifacts' ? 'text-cyan-400 border-cyan-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+        class="py-3 font-medium border-b-2 transition">
+        科研产物与论文
+      </button>
+      <button 
+        @click="activeTab = 'history'"
+        :class="activeTab === 'history' ? 'text-cyan-400 border-cyan-400' : 'text-slate-400 border-transparent hover:text-slate-200'"
+        class="py-3 font-medium border-b-2 transition">
+        历史记录
+      </button>
+    </div>
+
+    <!-- 主体容器 -->
+    <main class="flex-1 p-6 flex flex-col space-y-6 max-w-7xl w-full mx-auto">
+
+      <!-- ==================== 选项卡 1: 实验台 ==================== -->
+      <div v-show="activeTab === 'console'" class="flex flex-col space-y-6">
+
+        <!-- 实验配置面板 (空闲状态展开，运行中可折叠) -->
+        <section class="bg-slate-900/90 rounded-xl border border-slate-800 p-5 shadow-lg">
+          <div class="flex items-center justify-between mb-4">
+            <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider">科研实验配置</h2>
+            <div class="flex items-center space-x-3">
+              <button 
+                v-if="state.status === 'idle' || state.status === 'completed' || state.status === 'terminated'"
+                @click="resetForm" 
+                class="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded bg-slate-800 border border-slate-700">
+                重置
+              </button>
+              <button 
+                v-if="state.status === 'idle' || state.status === 'completed' || state.status === 'terminated'"
+                @click="startExperiment" 
+                class="text-xs font-semibold px-4 py-1.5 rounded bg-cyan-600 hover:bg-cyan-500 text-white shadow-md transition">
+                启动实验
+              </button>
+            </div>
+          </div>
+
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-4 text-xs">
+            <!-- 课题输入 -->
+            <div class="md:col-span-2 space-y-1.5">
+              <label class="text-slate-300 font-medium">初始探索课题或核心假说</label>
+              <input 
+                v-model="form.topic" 
+                :disabled="isExperimentActive"
+                type="text" 
+                placeholder="例如: Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks"
+                class="w-full bg-slate-950 border border-slate-800 rounded px-3 py-2 text-slate-100 placeholder-slate-600 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+              />
+              <div class="flex flex-wrap gap-1.5 pt-1">
+                <span class="text-slate-500 text-[11px]">预设样例:</span>
+                <button 
+                  v-for="(sample, sIdx) in sampleTopics" 
+                  :key="sample"
+                  @click="form.topic = sample"
+                  :disabled="isExperimentActive"
+                  class="text-[11px] text-cyan-400 bg-slate-800/80 hover:bg-slate-800 px-2 py-0.5 rounded border border-slate-700/80">
+                  {{ ['预设课题一', '预设课题二', '预设课题三'][sIdx] || '预设课题' }}
+                </button>
+              </div>
+            </div>
+
+            <!-- 运行模式与终止目标 -->
+            <div class="space-y-3">
+              <div>
+                <label class="text-slate-300 font-medium">运行模式</label>
+                <div class="grid grid-cols-2 gap-2 mt-1">
+                  <button 
+                    type="button"
+                    @click="form.mode = 'interactive'"
+                    :disabled="isExperimentActive"
+                    :class="form.mode === 'interactive' ? 'bg-cyan-950 border-cyan-600 text-cyan-300' : 'bg-slate-950 border-slate-800 text-slate-400'"
+                    class="py-1.5 px-2 rounded border text-center font-medium transition">
+                    人机协同演进
+                  </button>
+                  <button 
+                    type="button"
+                    @click="form.mode = 'autonomous'"
+                    :disabled="isExperimentActive"
+                    :class="form.mode === 'autonomous' ? 'bg-cyan-950 border-cyan-600 text-cyan-300' : 'bg-slate-950 border-slate-800 text-slate-400'"
+                    class="py-1.5 px-2 rounded border text-center font-medium transition">
+                    全自动科研流
+                  </button>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-2">
+                <div>
+                  <label class="text-slate-300">目标停止准确率</label>
+                  <input 
+                    v-model.number="form.target_threshold" 
+                    :disabled="isExperimentActive"
+                    type="number" step="0.01" min="0.5" max="1.0"
+                    class="w-full mt-1 bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-slate-100 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                  />
+                </div>
+                <div>
+                  <label class="text-slate-300">最大代际轮数</label>
+                  <input 
+                    v-model.number="form.max_generations" 
+                    :disabled="isExperimentActive"
+                    type="number" min="1" max="10"
+                    class="w-full mt-1 bg-slate-950 border border-slate-800 rounded px-2 py-1.5 text-slate-100 focus:outline-none focus:border-cyan-500 disabled:opacity-60"
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 流程步骤导航条 -->
+        <section class="bg-slate-900/60 rounded-xl border border-slate-800/80 p-4">
+          <div class="grid grid-cols-5 gap-2 text-center text-xs">
+            <div :class="getStageClass('stage_1')" class="py-2.5 px-2 rounded-lg border flex flex-col items-center">
+              <span class="font-bold text-sm">阶段一</span>
+              <span class="mt-0.5">选题与目标架构</span>
+            </div>
+            <div :class="getStageClass('stage_2')" class="py-2.5 px-2 rounded-lg border flex flex-col items-center">
+              <span class="font-bold text-sm">阶段二</span>
+              <span class="mt-0.5">实验方案规划</span>
+            </div>
+            <div :class="getStageClass('stage_3')" class="py-2.5 px-2 rounded-lg border flex flex-col items-center">
+              <span class="font-bold text-sm">阶段三</span>
+              <span class="mt-0.5">代码执行与训练</span>
+            </div>
+            <div :class="getStageClass('stage_4')" class="py-2.5 px-2 rounded-lg border flex flex-col items-center">
+              <span class="font-bold text-sm">阶段四</span>
+              <span class="mt-0.5">模型诊断与演进</span>
+            </div>
+            <div :class="getStageClass('completed')" class="py-2.5 px-2 rounded-lg border flex flex-col items-center">
+              <span class="font-bold text-sm">结题</span>
+              <span class="mt-0.5">成果交付</span>
+            </div>
+          </div>
+        </section>
+
+        <!-- 人机审核门禁交互卡片 (仅在 waiting_gate 时醒目挂起展示) -->
+        <section v-if="state.status === 'waiting_gate' && state.gate_info" class="bg-gradient-to-b from-slate-900 to-amber-950/30 rounded-xl border-2 border-amber-500/80 p-5 shadow-2xl space-y-4">
+          <div class="flex items-center justify-between border-b border-amber-500/30 pb-3">
+            <div class="flex items-center space-x-3">
+              <span class="px-2.5 py-0.5 bg-amber-500 text-slate-950 font-bold text-xs rounded">人机审核门禁</span>
+              <h3 class="text-base font-bold text-amber-200">{{ state.gate_info.title }}</h3>
+            </div>
+            <span class="text-xs text-amber-400">请研究者核验下方推演结论并给出决策</span>
+          </div>
+
+          <!-- Gate 1: 课题与初始架构审核 -->
+          <div v-if="state.gate_info.gate_id === 1" class="space-y-4 text-xs">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+                <div class="font-semibold text-slate-300">确立课题名称:</div>
+                <input v-model="gateForm.topic" type="text" class="w-full bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100" />
+                
+                <div class="font-semibold text-slate-300 pt-2">最终停止判定目标 (Stopping Criterion):</div>
+                <div class="flex items-center space-x-2">
+                  <span class="text-slate-400">测试准确率阈值:</span>
+                  <input v-model="gateForm.threshold" type="number" step="0.01" class="w-24 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100" />
+                </div>
+              </div>
+
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+                <div class="font-semibold text-cyan-300">初始代待测架构 (Gen 1):</div>
+                <div class="text-slate-200 font-bold">{{ state.gate_info.initial_architecture?.name }}</div>
+                <div class="text-slate-400"><span class="text-slate-300 font-medium">核心机制:</span> {{ state.gate_info.initial_architecture?.core_mechanisms }}</div>
+                <div class="text-slate-400"><span class="text-slate-300 font-medium">设计依据:</span> {{ state.gate_info.initial_architecture?.design_rationale }}</div>
+              </div>
+            </div>
+
+            <!-- 检索到的文献 -->
+            <div v-if="state.gate_info.papers && state.gate_info.papers.length > 0" class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+              <div class="font-semibold text-slate-300">自动检索捕获的前沿文献 (ArXiv):</div>
+              <ul class="space-y-1.5 text-slate-400">
+                <li v-for="(p, idx) in state.gate_info.papers.slice(0, 3)" :key="idx" class="flex items-start space-x-2">
+                  <span class="text-cyan-400 font-mono">[{{ p.bib_key }}]</span>
+                  <span class="text-slate-200">{{ p.title }}</span>
+                  <span class="text-slate-500">({{ p.published }})</span>
+                </li>
+              </ul>
+            </div>
+
+            <!-- 决策按钮组 (严格纯文本无符号) -->
+            <div class="flex items-center justify-end space-x-3 pt-2">
+              <button @click="submitGate(1, '重新选题')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs font-medium border border-slate-600 transition">
+                重新选题
+              </button>
+              <button @click="submitGate(1, '修改目标与架构')" class="px-4 py-2 bg-amber-800 hover:bg-amber-700 text-amber-100 rounded text-xs font-medium border border-amber-600 transition">
+                修改方案
+              </button>
+              <button @click="submitGate(1, '确认通过')" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold shadow-md transition">
+                确认通过
+              </button>
+            </div>
+          </div>
+
+          <!-- Gate 2: 实验方案审查 -->
+          <div v-else-if="state.gate_info.gate_id === 2" class="space-y-4 text-xs">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+                <div class="font-semibold text-slate-300">规划任务描述:</div>
+                <p class="text-slate-400">{{ state.gate_info.task_description }}</p>
+
+                <div class="font-semibold text-slate-300 pt-2">对比基线模型 (Baselines):</div>
+                <div class="flex flex-wrap gap-1.5">
+                  <span v-for="b in state.gate_info.baselines" :key="b.name" class="px-2 py-0.5 bg-slate-800 rounded border border-slate-700 text-slate-200">
+                    {{ b.name }}
+                  </span>
+                </div>
+              </div>
+
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-3">
+                <div class="font-semibold text-slate-300">超参数微调:</div>
+                <div class="grid grid-cols-2 gap-2">
+                  <div>
+                    <span class="text-slate-400">训练轮次 (Epochs):</span>
+                    <input v-model.number="gateForm.epochs" type="number" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100" />
+                  </div>
+                  <div>
+                    <span class="text-slate-400">学习率 (Learning Rate):</span>
+                    <input v-model.number="gateForm.learning_rate" type="number" step="0.0005" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-2 py-1 text-slate-100" />
+                  </div>
+                </div>
+                <div class="text-slate-500 text-[11px]">硬件执行模式: 自动检测 CUDA 加速环境</div>
+              </div>
+            </div>
+
+            <!-- 决策按钮组 -->
+            <div class="flex items-center justify-end space-x-3 pt-2">
+              <button @click="submitGate(2, '调整超参数')" class="px-4 py-2 bg-amber-800 hover:bg-amber-700 text-amber-100 rounded text-xs font-medium border border-amber-600 transition">
+                修改方案
+              </button>
+              <button @click="submitGate(2, '确认通过')" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold shadow-md transition">
+                确认通过
+              </button>
+            </div>
+          </div>
+
+          <!-- Gate 3: 诊断报告与下一代演进决策 -->
+          <div v-else-if="state.gate_info.gate_id === 3" class="space-y-4 text-xs">
+            <div v-if="state.gate_info.is_stagnant" class="bg-rose-950/80 border border-rose-600 p-3 rounded-lg text-rose-200">
+              <span class="font-bold">停滞突围机制触发：</span> 检测到实验指标进入平台期，系统已生成跳脱局部的重构演进方案！
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <!-- 左侧：缺陷与瓶颈剖析 -->
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+                <div class="flex items-center justify-between">
+                  <span class="font-semibold text-rose-300">当前代模型缺陷诊断:</span>
+                  <span class="text-slate-400">当前指标: {{ (state.gate_info.current_metric_value * 100).toFixed(2) }}%</span>
+                </div>
+                <ul class="space-y-1 text-slate-400">
+                  <li v-for="(flaw, idx) in state.gate_info.model_flaws" :key="idx" class="flex items-start space-x-1.5">
+                    <span class="text-rose-400">-</span>
+                    <span>{{ flaw }}</span>
+                  </li>
+                </ul>
+
+                <div class="font-semibold text-slate-300 pt-2">算力与收敛瓶颈剖析:</div>
+                <p class="text-slate-400 leading-relaxed">{{ state.gate_info.bottleneck_analysis }}</p>
+              </div>
+
+              <!-- 右侧：拟建议的下一代架构 -->
+              <div class="bg-slate-950/70 p-3 rounded-lg border border-slate-800 space-y-2">
+                <div class="font-semibold text-cyan-300">建议的下一代架构:</div>
+                <div>
+                  <span class="text-slate-400">架构名称:</span>
+                  <input v-model="gateForm.arch_name" type="text" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1.5 text-slate-100 font-bold" />
+                </div>
+                <div>
+                  <span class="text-slate-400">核心机制:</span>
+                  <textarea v-model="gateForm.core_mechanisms" rows="2" class="w-full mt-1 bg-slate-900 border border-slate-700 rounded px-2.5 py-1 text-slate-100"></textarea>
+                </div>
+                <div class="text-slate-400"><span class="text-slate-300">相较上一代变更:</span> {{ state.gate_info.next_architecture?.changes_from_previous }}</div>
+              </div>
+            </div>
+
+            <!-- 决策按钮组 -->
+            <div class="flex items-center justify-end space-x-3 pt-2">
+              <button @click="submitGate(3, '终止实验')" class="px-4 py-2 bg-slate-800 hover:bg-slate-700 text-rose-300 rounded text-xs font-medium border border-slate-700 transition">
+                终止实验
+              </button>
+              <button @click="submitGate(3, '调整改进方案')" class="px-4 py-2 bg-amber-800 hover:bg-amber-700 text-amber-100 rounded text-xs font-medium border border-amber-600 transition">
+                调整方案
+              </button>
+              <button @click="submitGate(3, '批准演进并训练下一代')" class="px-5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs font-semibold shadow-md transition">
+                批准演进
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <!-- 实时监控分栏：左侧终端日志流，右侧图表与指标 -->
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 items-start">
+          
+          <!-- 左侧：终端暗黑控制台 -->
+          <div class="bg-slate-900/90 rounded-xl border border-slate-800 overflow-hidden flex flex-col h-[520px] shadow-lg">
+            <div class="bg-slate-950 px-4 py-2.5 border-b border-slate-800 flex items-center justify-between">
+              <div class="flex items-center space-x-2">
+                <div class="w-3 h-3 rounded-full bg-slate-700"></div>
+                <div class="w-3 h-3 rounded-full bg-slate-700"></div>
+                <div class="w-3 h-3 rounded-full bg-slate-700"></div>
+                <span class="text-xs font-mono text-slate-400 pl-2">沙箱运行与智能体日志</span>
+              </div>
+              <button @click="clearLogs" class="text-xs text-slate-400 hover:text-slate-200 px-2 py-0.5 rounded bg-slate-800 border border-slate-700">
+                清空日志
+              </button>
+            </div>
+            
+            <div ref="logContainer" class="flex-1 p-4 overflow-y-auto terminal-font text-xs space-y-1 bg-slate-950/90 text-slate-300">
+              <div v-if="logs.length === 0" class="text-slate-600 italic">暂无执行日志，点击上方“启动实验”开始...</div>
+              <div v-for="(l, idx) in logs" :key="idx" :class="getLogLineClass(l)">
+                {{ l }}
+              </div>
+            </div>
+          </div>
+
+          <!-- 右侧：指标表格与收敛折线图 -->
+          <div class="flex flex-col space-y-6">
+            
+            <!-- 指标动态对比图表 -->
+            <div class="bg-slate-900/90 rounded-xl border border-slate-800 p-4 shadow-lg">
+              <div class="flex items-center justify-between mb-2">
+                <h3 class="text-xs font-semibold text-slate-200 uppercase tracking-wider">代际评测指标收敛折线图</h3>
+                <span class="text-xs text-cyan-400 font-mono">Test Accuracy</span>
+              </div>
+              <div class="h-56 relative">
+                <canvas id="accuracyChart"></canvas>
+              </div>
+            </div>
+
+            <!-- 最新量化对比表格 -->
+            <div class="bg-slate-900/90 rounded-xl border border-slate-800 p-4 shadow-lg space-y-3">
+              <div class="flex items-center justify-between">
+                <h3 class="text-xs font-semibold text-slate-200 uppercase tracking-wider">当前代模型基准对比</h3>
+                <span class="text-xs text-slate-400 font-mono">第 {{ state.generation }} 代</span>
+              </div>
+              <div class="overflow-x-auto">
+                <table class="w-full text-left text-xs">
+                  <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                    <tr>
+                      <th class="py-2 px-3">模型名称</th>
+                      <th class="py-2 px-3 text-right">准确率 (Accuracy)</th>
+                      <th class="py-2 px-3 text-right">损失 (Loss)</th>
+                      <th class="py-2 px-3 text-right">训练耗时 (s)</th>
+                    </tr>
+                  </thead>
+                  <tbody class="divide-y divide-slate-800/60 font-mono">
+                    <tr v-for="(m, name) in latestMetricsResults" :key="name" class="hover:bg-slate-800/40">
+                      <td class="py-2 px-3 font-sans font-medium text-slate-200">{{ name }}</td>
+                      <td class="py-2 px-3 text-right text-cyan-400 font-bold">{{ (m.test_accuracy * 100).toFixed(2) }}%</td>
+                      <td class="py-2 px-3 text-right text-slate-300">{{ m.test_loss ? m.test_loss.toFixed(4) : '-' }}</td>
+                      <td class="py-2 px-3 text-right text-slate-400">{{ m.training_time_sec ? m.training_time_sec.toFixed(2) : '-' }}</td>
+                    </tr>
+                    <tr v-if="!latestMetricsResults || Object.keys(latestMetricsResults).length === 0">
+                      <td colspan="4" class="py-4 text-center text-slate-500 font-sans italic">等待实验训练执行产出指标...</td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+          </div>
+        </div>
+
+      </div>
+
+      <!-- ==================== 选项卡 2: 架构演进轨迹 ==================== -->
+      <div v-show="activeTab === 'evolution'" class="space-y-6">
+        <div class="bg-slate-900/90 rounded-xl border border-slate-800 p-5 shadow-lg">
+          <div class="flex items-center justify-between mb-4">
+            <div>
+              <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider">模型架构代际演进图谱</h2>
+              <p class="text-xs text-slate-400 mt-1">记录每一次架构重构、机制进化以及量化提升轨迹</p>
+            </div>
+            <span class="text-xs font-mono text-cyan-400 bg-cyan-950 px-2.5 py-1 rounded border border-cyan-800">
+              共历经 {{ state.evolution_history.length }} 代演进
+            </span>
+          </div>
+
+          <div v-if="state.evolution_history.length === 0" class="py-12 text-center text-slate-500 text-xs italic">
+            尚未产生架构演进历史，请在实验台启动实验。
+          </div>
+
+          <div class="space-y-4">
+            <div 
+              v-for="item in state.evolution_history" 
+              :key="item.generation"
+              class="bg-slate-950 border border-slate-800 rounded-lg p-4 relative overflow-hidden">
+              <div class="flex items-start justify-between">
+                <div class="space-y-1">
+                  <div class="flex items-center space-x-3">
+                    <span class="px-2 py-0.5 rounded bg-cyan-950 text-cyan-400 border border-cyan-800 font-mono text-xs font-bold">
+                      Gen {{ item.generation }}
+                    </span>
+                    <h3 class="text-sm font-bold text-slate-100">{{ item.architecture_name }}</h3>
+                    <span v-if="item.target_achieved" class="px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-800 text-xs font-medium">
+                      达标优胜
+                    </span>
+                  </div>
+                  <p class="text-xs text-slate-400 pt-1">
+                    <span class="text-slate-300 font-medium">演进变更点:</span> {{ item.changes_from_previous }}
+                  </p>
+                  <p class="text-xs text-slate-500">
+                    <span class="text-slate-400 font-medium">核心机制:</span> {{ item.architecture_spec?.core_mechanisms }}
+                  </p>
+                </div>
+
+                <!-- 指标概览 -->
+                <div class="text-right text-xs font-mono space-y-1">
+                  <div class="text-slate-400">记录时间: {{ item.timestamp }}</div>
+                  <div class="text-cyan-400 font-bold text-sm">
+                    最高准确率: {{ getBestAccForGen(item) }}
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 选项卡 3: 产物与论文 ==================== -->
+      <div v-show="activeTab === 'artifacts'" class="space-y-6">
+        <div class="bg-slate-900/90 rounded-xl border border-slate-800 p-5 shadow-lg space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div>
+              <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider">科研成果与学术排版产物</h2>
+              <p class="text-xs text-slate-400 mt-1">支持实时预览生成的 LaTeX 论文、Markdown 文稿及出版级图表</p>
+            </div>
+            <div class="flex items-center space-x-3">
+              <button 
+                v-if="state.run_id"
+                @click="downloadBundle" 
+                class="px-4 py-1.5 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium shadow-md transition">
+                下载成果包
+              </button>
+            </div>
+          </div>
+
+          <!-- 图表画廊 -->
+          <div v-if="state.plots && state.plots.length > 0" class="space-y-2">
+            <h3 class="text-xs font-semibold text-slate-300 uppercase">生成的高清科研图表 (300+ DPI)</h3>
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div v-for="fig in state.plots" :key="fig" class="bg-slate-950 p-2 rounded-lg border border-slate-800">
+                <img :src="'/api/artifacts/' + state.run_id + '/file/figures/' + fig" class="w-full h-auto rounded" />
+                <div class="text-center text-xs text-slate-400 font-mono py-1">{{ fig }}</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Markdown 论文预览 -->
+          <div class="space-y-2">
+            <div class="flex items-center justify-between">
+              <h3 class="text-xs font-semibold text-slate-300 uppercase">学术论文文稿 (paper.md)</h3>
+              <button @click="copyPaper" class="text-xs text-slate-400 hover:text-slate-200 px-2 py-1 rounded bg-slate-800 border border-slate-700">
+                复制文稿
+              </button>
+            </div>
+            <div class="bg-slate-950 p-5 rounded-lg border border-slate-800 text-xs text-slate-200 max-h-[500px] overflow-y-auto leading-relaxed" v-html="renderedPaper">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ==================== 选项卡 4: 历史记录 ==================== -->
+      <div v-show="activeTab === 'history'" class="space-y-6">
+        <div class="bg-slate-900/90 rounded-xl border border-slate-800 p-5 shadow-lg space-y-4">
+          <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+            <div>
+              <h2 class="text-sm font-semibold text-slate-200 uppercase tracking-wider">历史实验档案库</h2>
+              <p class="text-xs text-slate-400 mt-1">工作区全部实验运行记录与成果备份</p>
+            </div>
+            <button @click="fetchHistory" class="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded text-xs border border-slate-700 transition">
+              刷新记录
+            </button>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="w-full text-left text-xs">
+              <thead class="text-slate-400 border-b border-slate-800 bg-slate-950/50">
+                <tr>
+                  <th class="py-2.5 px-3">运行标识 (Run ID)</th>
+                  <th class="py-2.5 px-3">创建时间</th>
+                  <th class="py-2.5 px-3 text-right">演进代数</th>
+                  <th class="py-2.5 px-3 text-right">最高准确率</th>
+                  <th class="py-2.5 px-3 text-center">论文</th>
+                  <th class="py-2.5 px-3 text-center">成果包</th>
+                  <th class="py-2.5 px-3 text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-slate-800/60 font-mono">
+                <tr v-for="item in historyRuns" :key="item.run_id" class="hover:bg-slate-800/40">
+                  <td class="py-2.5 px-3 text-cyan-400 font-bold">{{ item.run_id }}</td>
+                  <td class="py-2.5 px-3 text-slate-400 font-sans">{{ item.created_at }}</td>
+                  <td class="py-2.5 px-3 text-right text-slate-300">{{ item.generations }}</td>
+                  <td class="py-2.5 px-3 text-right text-emerald-400 font-bold">
+                    {{ item.best_accuracy ? (item.best_accuracy * 100).toFixed(2) + '%' : '-' }}
+                  </td>
+                  <td class="py-2.5 px-3 text-center font-sans">
+                    <span v-if="item.has_paper" class="text-emerald-400">已就绪</span>
+                    <span v-else class="text-slate-600">-</span>
+                  </td>
+                  <td class="py-2.5 px-3 text-center font-sans">
+                    <span v-if="item.has_bundle" class="text-cyan-400">已打包</span>
+                    <span v-else class="text-slate-600">-</span>
+                  </td>
+                  <td class="py-2.5 px-3 text-right">
+                    <button @click="loadHistoryDetail(item.run_id)" class="px-2.5 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded border border-slate-700 text-[11px] font-sans">
+                      查看详情
+                    </button>
+                  </td>
+                </tr>
+                <tr v-if="historyRuns.length === 0">
+                  <td colspan="7" class="py-8 text-center text-slate-500 font-sans italic">暂无历史实验记录</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+
+    <!-- 底部状态页脚 -->
+    <footer class="bg-slate-900 border-t border-slate-800 px-6 py-3 text-xs text-slate-500 flex items-center justify-between">
+      <span>Science4Me: Autonomous AI Scientist & Research Engine</span>
+      <span class="font-mono">FastAPI + LangGraph + Web Dashboard</span>
+    </footer>
+
+  </div>
+
+  <!-- 前端 Vue 交互脚本 -->
+  <script>
+    const { createApp, ref, reactive, computed, onMounted, nextTick } = Vue;
+
+    createApp({
+      setup() {
+        const activeTab = ref('console');
+        const logs = ref([]);
+        const logContainer = ref(null);
+        let accuracyChartInstance = null;
+        let ws = null;
+
+        const sampleTopics = [
+          "Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks",
+          "Attention Regularization with Gradient Harmonization for Transformer Training",
+          "Dynamic Weight Sparsification via Curvature-Aware Pruning in Convolutional Networks"
+        ];
+
+        const form = reactive({
+          topic: "Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks",
+          mode: "interactive",
+          target_metric: "test_accuracy",
+          target_threshold: 0.95,
+          target_condition: ">=",
+          epochs: 15,
+          learning_rate: 0.002,
+          batch_size: 64,
+          max_generations: 5
+        });
+
+        const gateForm = reactive({
+          topic: "",
+          threshold: 0.95,
+          epochs: 15,
+          learning_rate: 0.002,
+          arch_name: "",
+          core_mechanisms: ""
+        });
+
+        const state = reactive({
+          status: "idle",
+          mode: "interactive",
+          run_id: "",
+          work_dir: "",
+          topic: "",
+          current_stage: "idle",
+          generation: 1,
+          max_generations: 5,
+          goal_data: {},
+          current_plan: {},
+          current_architecture: {},
+          latest_metrics: {},
+          evolution_history: [],
+          gate_info: null,
+          plots: [],
+          paper_markdown: "",
+          bundle_path: ""
+        });
+
+        const historyRuns = ref([]);
+
+        const isExperimentActive = computed(() => {
+          return state.status === 'running' || state.status === 'waiting_gate';
+        });
+
+        const latestMetricsResults = computed(() => {
+          return state.latest_metrics?.results || {};
+        });
+
+        const renderedPaper = computed(() => {
+          if (!state.paper_markdown) {
+            return '<p class="text-slate-500 italic">尚未生成论文，实验完成后将自动起草并呈现在此。</p>';
+          }
+          return marked.parse(state.paper_markdown);
+        });
+
+        // 阶段高亮逻辑
+        const getStageClass = (stageKey) => {
+          const stages = ['stage_1', 'stage_2', 'stage_3', 'stage_4', 'completed'];
+          const currentIndex = stages.indexOf(state.current_stage);
+          const thisIndex = stages.indexOf(stageKey);
+
+          if (state.current_stage === stageKey) {
+            return 'bg-cyan-950/80 border-cyan-500 text-cyan-300 font-bold ring-1 ring-cyan-500';
+          } else if (currentIndex > thisIndex) {
+            return 'bg-slate-900 border-slate-700 text-slate-300';
+          } else {
+            return 'bg-slate-950 border-slate-800 text-slate-600';
+          }
+        };
+
+        const getLogLineClass = (line) => {
+          if (line.includes('[OK]') || line.includes('成功') || line.includes('FINISHED')) return 'text-emerald-400';
+          if (line.includes('门禁') || line.includes('审核') || line.includes('waiting')) return 'text-amber-400 font-semibold';
+          if (line.includes('EXCEPTION') || line.includes('ERROR') || line.includes('报错') || line.includes('失败')) return 'text-rose-400 font-bold';
+          if (line.includes('智能体') || line.includes('启动') || line.includes('代')) return 'text-cyan-300';
+          return 'text-slate-300';
+        };
+
+        const getBestAccForGen = (item) => {
+          const res = item.metrics?.results || {};
+          let best = 0;
+          for (let k in res) {
+            best = Math.max(best, res[k].test_accuracy || 0);
+          }
+          return best ? (best * 100).toFixed(2) + '%' : '-';
+        };
+
+        // 初始化 WebSocket 连接
+        const initWebSocket = () => {
+          const loc = window.location;
+          const proto = loc.protocol === 'https:' ? 'wss:' : 'ws:';
+          const wsUrl = `${proto}//${loc.host}/ws`;
+
+          ws = new WebSocket(wsUrl);
+
+          ws.onmessage = (event) => {
+            try {
+              const msg = JSON.parse(event.data);
+              handleWsEvent(msg);
+            } catch (err) {
+              console.error(err);
+            }
+          };
+
+          ws.onclose = () => {
+            setTimeout(initWebSocket, 3000);
+          };
+        };
+
+        const handleWsEvent = (msg) => {
+          if (msg.type === 'init' || msg.type === 'status_change') {
+            Object.assign(state, msg.payload);
+            if (msg.payload.logs) {
+              logs.value = msg.payload.logs;
+            }
+            if (state.gate_info) {
+              syncGateForm(state.gate_info);
+            }
+            updateChart();
+            scrollToBottom();
+          } else if (msg.type === 'log') {
+            logs.value.push(msg.payload.line);
+            scrollToBottom();
+          } else if (msg.type === 'gate_required') {
+            state.gate_info = msg.payload;
+            syncGateForm(msg.payload);
+          } else if (msg.type === 'metrics_update') {
+            state.latest_metrics = msg.payload.metrics;
+            state.evolution_history = msg.payload.evolution_history;
+            updateChart();
+          }
+        };
+
+        const syncGateForm = (info) => {
+          if (info.gate_id === 1) {
+            gateForm.topic = info.topic || state.topic;
+            gateForm.threshold = info.target_goal?.threshold || 0.95;
+          } else if (info.gate_id === 2) {
+            gateForm.epochs = info.hyperparameters?.epochs || 15;
+            gateForm.learning_rate = info.hyperparameters?.learning_rate || 0.002;
+          } else if (info.gate_id === 3) {
+            gateForm.arch_name = info.next_architecture?.name || '';
+            gateForm.core_mechanisms = info.next_architecture?.core_mechanisms || '';
+          }
+        };
+
+        const scrollToBottom = () => {
+          nextTick(() => {
+            if (logContainer.value) {
+              logContainer.value.scrollTop = logContainer.value.scrollHeight;
+            }
+          });
+        };
+
+        // 启动实验
+        const startExperiment = async () => {
+          try {
+            const res = await fetch('/api/experiment/start', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(form)
+            });
+            const data = await res.json();
+            if (!res.ok) alert(data.detail || '启动失败');
+          } catch (err) {
+            alert('网络请求异常: ' + err.message);
+          }
+        };
+
+        // 提交门禁决策
+        const submitGate = async (gateId, decision) => {
+          const payload = {
+            gate_id: gateId,
+            decision: decision,
+            custom_data: {}
+          };
+          if (gateId === 1) {
+            payload.custom_data = {
+              topic: gateForm.topic,
+              threshold: gateForm.threshold
+            };
+          } else if (gateId === 2) {
+            payload.custom_data = {
+              epochs: gateForm.epochs,
+              learning_rate: gateForm.learning_rate
+            };
+          } else if (gateId === 3) {
+            payload.custom_data = {
+              name: gateForm.arch_name,
+              core_mechanisms: gateForm.core_mechanisms
+            };
+          }
+
+          try {
+            const res = await fetch('/api/experiment/gate', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok) alert(data.detail || '提交门禁决策失败');
+          } catch (err) {
+            alert('请求异常: ' + err.message);
+          }
+        };
+
+        // 终止实验
+        const stopExperiment = async () => {
+          if (!confirm('确认终止当前正在运行的科研实验闭环吗？')) return;
+          try {
+            await fetch('/api/experiment/stop', { method: 'POST' });
+          } catch (err) {
+            alert(err.message);
+          }
+        };
+
+        // 重置配置
+        const resetForm = () => {
+          form.topic = sampleTopics[0];
+          form.target_threshold = 0.95;
+          form.epochs = 15;
+          form.learning_rate = 0.002;
+        };
+
+        const clearLogs = () => {
+          logs.value = [];
+        };
+
+        // Chart.js 图表渲染
+        const initChart = () => {
+          const ctx = document.getElementById('accuracyChart');
+          if (!ctx) return;
+          accuracyChartInstance = new Chart(ctx, {
+            type: 'line',
+            data: {
+              labels: [],
+              datasets: [{
+                label: '最优测试准确率 (Test Accuracy)',
+                data: [],
+                borderColor: '#06b6d4',
+                backgroundColor: 'rgba(6, 182, 212, 0.1)',
+                tension: 0.3,
+                fill: true,
+                pointBackgroundColor: '#06b6d4',
+                pointRadius: 4
+              }]
+            },
+            options: {
+              responsive: true,
+              maintainAspectRatio: false,
+              scales: {
+                y: {
+                  min: 0.5,
+                  max: 1.0,
+                  grid: { color: '#1e293b' },
+                  ticks: { color: '#94a3b8' }
+                },
+                x: {
+                  grid: { color: '#1e293b' },
+                  ticks: { color: '#94a3b8' }
+                }
+              },
+              plugins: {
+                legend: { display: false }
+              }
+            }
+          });
+        };
+
+        const updateChart = () => {
+          if (!accuracyChartInstance) return;
+          const history = state.evolution_history || [];
+          if (history.length === 0) return;
+
+          const labels = history.map(item => `Gen ${item.generation}`);
+          const data = history.map(item => {
+            const res = item.metrics?.results || {};
+            let best = 0;
+            for (let k in res) {
+              best = Math.max(best, res[k].test_accuracy || 0);
+            }
+            return best;
+          });
+
+          accuracyChartInstance.data.labels = labels;
+          accuracyChartInstance.data.datasets[0].data = data;
+          accuracyChartInstance.update();
+        };
+
+        // 历史记录与产物
+        const fetchHistory = async () => {
+          try {
+            const res = await fetch('/api/history');
+            historyRuns.value = await res.json();
+          } catch (err) {
+            console.error(err);
+          }
+        };
+
+        const loadHistoryDetail = async (runId) => {
+          try {
+            const res = await fetch(`/api/history/${runId}`);
+            const data = await res.json();
+            state.run_id = runId;
+            state.evolution_history = data.evolution_history || [];
+            state.latest_metrics = data.metrics || {};
+            state.paper_markdown = data.paper_markdown || '';
+            state.plots = data.figures || [];
+            activeTab.value = 'evolution';
+            updateChart();
+          } catch (err) {
+            alert('加载历史详情失败: ' + err.message);
+          }
+        };
+
+        const downloadBundle = () => {
+          if (!state.run_id) return;
+          window.open(`/api/artifacts/${state.run_id}/file/research_bundle.zip`, '_blank');
+        };
+
+        const copyPaper = () => {
+          if (!state.paper_markdown) return;
+          navigator.clipboard.writeText(state.paper_markdown).then(() => {
+            alert('论文文稿已复制至剪贴板');
+          });
+        };
+
+        onMounted(() => {
+          initChart();
+          initWebSocket();
+          fetchHistory();
+        });
+
+        return {
+          activeTab,
+          form,
+          gateForm,
+          state,
+          logs,
+          logContainer,
+          sampleTopics,
+          historyRuns,
+          isExperimentActive,
+          latestMetricsResults,
+          renderedPaper,
+          getStageClass,
+          getLogLineClass,
+          getBestAccForGen,
+          startExperiment,
+          submitGate,
+          stopExperiment,
+          resetForm,
+          clearLogs,
+          fetchHistory,
+          loadHistoryDetail,
+          downloadBundle,
+          copyPaper
+        };
+      }
+    }).mount('#app');
+  </script>
+</body>
+</html>

@@ -42,11 +42,54 @@ class ResearchSession:
         self.agent4_diag = OptimizationDiagnosisAgent(self.llm)
 
         # 会话运行状态
+        self.status = "initialized"
         self.generation = 1
         self.goal_data: Dict[str, Any] = {}
         self.current_plan: Dict[str, Any] = {}
         self.current_architecture: Dict[str, Any] = {}
         self.changes_description: str = "初始代基础架构"
+        self.save_state()
+
+    def save_state(self):
+        """将当前会话运行状态持久化落盘至 session_state.json"""
+        state_file = os.path.join(self.work_dir, "session_state.json")
+        data = {
+            "run_id": self.run_id,
+            "topic": self.user_topic,
+            "generation": self.generation,
+            "status": getattr(self, "status", "active"),
+            "goal_data": self.goal_data,
+            "current_plan": self.current_plan,
+            "current_architecture": self.current_architecture,
+            "changes_description": self.changes_description,
+            "created_at": self.timestamp,
+            "updated_at": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        }
+        with open(state_file, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+
+    @classmethod
+    def resume(cls, work_dir: str, config_path: str = "configs/config.yaml") -> "ResearchSession":
+        """从磁盘持久化工作区断点恢复会话对象"""
+        state_file = os.path.join(work_dir, "session_state.json")
+        if not os.path.exists(state_file):
+            raise FileNotFoundError(f"未找到会话状态文件: {state_file}")
+
+        with open(state_file, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        session = cls(topic=data.get("topic", "Resumed Research"), config_path=config_path)
+        session.run_id = data.get("run_id", session.run_id)
+        session.work_dir = os.path.abspath(work_dir)
+        session.timestamp = data.get("created_at", session.timestamp)
+        session.generation = data.get("generation", 1)
+        session.status = data.get("status", "resumed")
+        session.goal_data = data.get("goal_data", {})
+        session.current_plan = data.get("current_plan", {})
+        session.current_architecture = data.get("current_architecture", {})
+        session.changes_description = data.get("changes_description", "从历史断点恢复")
+        session.evolution_mgr = EvolutionHistoryManager(session.work_dir)
+        return session
 
     # ==================== 智能体 1：选题、目标设定与架构规划 ====================
     def stage_goal_and_architecture(self) -> Dict[str, Any]:
@@ -99,6 +142,8 @@ class ResearchSession:
             self.user_topic = Prompt.ask("输入新的探索方向关键词", default=self.user_topic)
             return self.stage_goal_and_architecture()
 
+        self.status = "awaiting_gate2"
+        self.save_state()
         return self.goal_data
 
     # ==================== 智能体 2：实验方案设计 ====================
@@ -135,6 +180,8 @@ class ResearchSession:
             self.current_plan["hyperparameters"]["learning_rate"] = float(lr)
             console.print("[green]超参数已调整完毕！[/green]")
 
+        self.status = "ready_for_training"
+        self.save_state()
         return self.current_plan
 
     # ==================== 智能体 3 与 4：演进优化循环 ====================
@@ -199,6 +246,8 @@ class ResearchSession:
 
             # 检查是否达成最终目标 (停止条件)
             if diagnosis.get("target_achieved"):
+                self.status = "target_achieved"
+                self.save_state()
                 console.print(Panel(
                     f"[bold green]恭喜！模型已达成设定的最终量化目标！[/bold green]\n\n"
                     f"最终指标: [bold cyan]{target_goal.get('metric')} = {diagnosis.get('current_metric_value')*100:.2f}%[/bold cyan] "
@@ -209,6 +258,9 @@ class ResearchSession:
                     title="[bold green]★ 科研目标顺利达成 (Stopping Target Achieved)[/bold green]"
                 ))
                 break
+
+            self.status = "awaiting_gate3"
+            self.save_state()
 
             # 若未达标，呈现缺陷分析与下一步方案
             flaws_text = "\n".join([f"    - {f}" for f in diagnosis.get("model_flaws", [])])
@@ -242,6 +294,8 @@ class ResearchSession:
                 self.changes_description = next_arch.get("changes_from_previous", f"由 Gen{self.generation} 演进")
                 self.current_architecture = next_arch
                 self.generation += 1
+                self.status = "ready_for_training"
+                self.save_state()
             elif choice == "调整改进方案":
                 custom_name = Prompt.ask("输入自定义架构名称", default=next_arch.get("name"))
                 custom_mech = Prompt.ask("输入自定义核心机制", default=next_arch.get("core_mechanisms"))
@@ -253,6 +307,10 @@ class ResearchSession:
                 }
                 self.changes_description = "人工指导微调方案"
                 self.generation += 1
+                self.status = "ready_for_training"
+                self.save_state()
             else:
+                self.status = "terminated_by_user"
+                self.save_state()
                 console.print("[yellow]已由研究者人工终止实验闭环。[/yellow]")
                 break

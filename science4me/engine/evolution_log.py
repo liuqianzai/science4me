@@ -33,9 +33,10 @@ class EvolutionHistoryManager:
         hyperparameters: Dict[str, Any],
         metrics: Dict[str, Any],
         target_achieved: bool,
-        diagnosis: Optional[Dict[str, Any]] = None
+        diagnosis: Optional[Dict[str, Any]] = None,
+        checkpoint_path: Optional[str] = None
     ) -> Dict[str, Any]:
-        """记录一代模型的完整演进数据"""
+        """记录一代模型的完整演进数据，包含模型物理权重路径"""
         entry = {
             "generation": generation,
             "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -45,6 +46,7 @@ class EvolutionHistoryManager:
             "hyperparameters": hyperparameters,
             "metrics": metrics,
             "target_achieved": target_achieved,
+            "checkpoint_path": checkpoint_path or "",
             "diagnosis": diagnosis or {}
         }
         self.history.append(entry)

@@ -27,7 +27,8 @@ class ExecutionTrainingAgent:
         work_dir: str,
         evolution_mgr: EvolutionHistoryManager,
         target_goal: Dict[str, Any],
-        changes_description: str = "初始代架构"
+        changes_description: str = "初始代架构",
+        log_callback=None
     ) -> Tuple[bool, Dict[str, Any], str]:
         """生成训练脚本、在沙箱中执行训练并持久化演进记录"""
         code = self._generate_training_code(generation, architecture_spec, experiment_plan)
@@ -38,12 +39,21 @@ class ExecutionTrainingAgent:
             f.write(code)
 
         # 在沙箱中执行
-        success, logs, metrics, error_tb = SandboxExecutor.run_script(
-            code=code,
-            work_dir=work_dir,
-            script_name=script_name,
-            timeout_seconds=300
-        )
+        if log_callback:
+            success, logs, metrics, error_tb = SandboxExecutor.run_script_stream(
+                code=code,
+                work_dir=work_dir,
+                script_name=script_name,
+                timeout_seconds=300,
+                log_callback=log_callback
+            )
+        else:
+            success, logs, metrics, error_tb = SandboxExecutor.run_script(
+                code=code,
+                work_dir=work_dir,
+                script_name=script_name,
+                timeout_seconds=300
+            )
 
         # 检查是否达成目标
         target_metric = target_goal.get("metric", "test_accuracy")
@@ -61,6 +71,13 @@ class ExecutionTrainingAgent:
 
         achieved = (current_val >= target_val) if condition == ">=" else (current_val <= target_val)
 
+        # 提取模型物理权重路径
+        checkpoint_path = ""
+        for name, m in results.items():
+            if arch_name in name or "Proposed" in name or f"Gen{generation}" in name:
+                checkpoint_path = m.get("checkpoint_path", "")
+                break
+
         # 持久化记录到演进历史文件
         evolution_mgr.record_generation(
             generation=generation,
@@ -69,7 +86,8 @@ class ExecutionTrainingAgent:
             changes_from_previous=changes_description,
             hyperparameters=experiment_plan.get("hyperparameters", {}),
             metrics=metrics,
-            target_achieved=achieved
+            target_achieved=achieved,
+            checkpoint_path=checkpoint_path
         )
 
         return success, metrics, logs
@@ -212,7 +230,8 @@ class CurrentGenModel(nn.Module):
         return self.fc3(out)
 """
 
-        return f'''import time
+        return f'''import os
+import time
 import json
 import torch
 import torch.nn as nn
@@ -274,6 +293,7 @@ models = {{
     "{arch_name}": CurrentGenModel().to(device)
 }}
 
+os.makedirs("checkpoints", exist_ok=True)
 criterion = nn.CrossEntropyLoss()
 results = {{}}
 history = {{}}
@@ -283,6 +303,8 @@ for name, model in models.items():
     optimizer = optim.Adam(model.parameters(), lr={lr}, weight_decay=1e-4)
     start_time = time.time()
     loss_hist, acc_hist = [], []
+    best_acc = -1.0
+    best_state = None
 
     for ep in range(epochs):
         model.train()
@@ -306,19 +328,29 @@ for name, model in models.items():
                 preds = model(bx).argmax(dim=-1)
                 correct += (preds == by).sum().item()
                 total += len(by)
-        acc_hist.append(round(correct / total, 4))
+        cur_acc = round(correct / total, 4)
+        acc_hist.append(cur_acc)
+
+        if cur_acc > best_acc:
+            best_acc = cur_acc
+            best_state = {{k: v.cpu().clone() for k, v in model.state_dict().items()}}
 
     elapsed = time.time() - start_time
+    ckpt_path = f"checkpoints/best_{{name}}.pt"
+    if best_state is not None:
+        torch.save(best_state, ckpt_path)
+
     results[name] = {{
         "test_accuracy": acc_hist[-1],
         "test_loss": loss_hist[-1],
-        "training_time_sec": round(elapsed, 2)
+        "training_time_sec": round(elapsed, 2),
+        "checkpoint_path": ckpt_path
     }}
     history[name] = {{
         "loss": loss_hist,
         "val_accuracy": acc_hist
     }}
-    print(f"[EVAL] {{name}}: Acc = {{acc_hist[-1]*100:.2f}}% | Loss = {{loss_hist[-1]:.4f}} | Time = {{elapsed:.2f}}s")
+    print(f"[EVAL] {{name}}: Acc = {{acc_hist[-1]*100:.2f}}% | Loss = {{loss_hist[-1]:.4f}} | Saved Checkpoint: {{ckpt_path}}")
 
 with open("metrics.json", "w", encoding="utf-8") as f:
     json.dump({{"results": results, "history": history}}, f, indent=2)

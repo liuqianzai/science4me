@@ -55,12 +55,31 @@ def parse_args():
         default="workspaces",
         help="实验产物工作区根目录"
     )
+    parser.add_argument(
+        "--interactive", "-i",
+        action="store_true",
+        help="启用人机协同 (Human-in-the-Loop) 交互模式，每一步由人工审查确认"
+    )
     return parser.parse_args()
 
 
 def main():
     print_banner()
     args = parse_args()
+
+    # 0. 若启用人机协同交互模式
+    if args.interactive:
+        from science4me.engine.session import ResearchSession
+        session = ResearchSession(
+            topic=args.topic,
+            workspace_root=args.workspace,
+            config_path=args.config
+        )
+        session.stage_ideation()
+        session.stage_planning()
+        if session.stage_coding_and_execution():
+            session.stage_analysis_and_decision()
+        return
 
     # 1. 初始化实验运行目录
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")

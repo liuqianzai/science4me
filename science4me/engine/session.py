@@ -267,14 +267,26 @@ class ResearchSession:
             is_stagnant = diagnosis.get("is_stagnant", False)
             next_arch = diagnosis.get("next_architecture", {})
 
-            stagnant_warning = ""
-            if is_stagnant:
-                stagnant_warning = "\n[bold red]【停滞突围机制触发】：检测到近期实验指标未有明显提升，系统已生成跳脱局部的重构方案！[/bold red]\n"
+            status_badges = []
+            if diagnosis.get("is_regression"):
+                status_badges.append(
+                    f"[bold yellow]★【保本争优机制生效】: 当前代指标未超越历史最高 (Gen {diagnosis.get('anchor_baseline_gen')}: {diagnosis.get('anchor_baseline_value')*100:.2f}%)，本轮演变已自动锁定历史最佳 Checkpoint 架构作为祖先基底！[/bold yellow]"
+                )
+            if diagnosis.get("is_stagnant"):
+                status_badges.append(
+                    "[bold red]★【停滞突围机制触发】: 检测到指标收敛陷入平台期，系统已在线检索前沿突破文献并生成颠覆性重构方案！[/bold red]"
+                )
+            if diagnosis.get("last_resort_activated"):
+                status_badges.append(
+                    "[bold magenta]★【最后手段机制激活】: 连续多轮未能超越历史最优，已按科学决策规则适度放宽轻量化参数约束（增加通道容量），以充裕容量换取各创新模块的无损兼容！[/bold magenta]"
+                )
+
+            status_banner = ("\n" + "\n".join(status_badges) + "\n") if status_badges else ""
 
             console.print(Panel(
                 f"当前指标: {target_goal.get('metric')} = {diagnosis.get('current_metric_value')*100:.2f}% "
-                f"(距离最终目标 {target_goal.get('threshold')*100:.2f}% 尚有差距)\n"
-                f"{stagnant_warning}\n"
+                f"(历史最高 Gen {diagnosis.get('anchor_baseline_gen')}: {diagnosis.get('anchor_baseline_value')*100:.2f}% | 最终目标 {target_goal.get('threshold')*100:.2f}%)\n"
+                f"{status_banner}\n"
                 f"[bold]诊断出的模型缺陷:[/bold]\n{flaws_text}\n\n"
                 f"[bold]瓶颈深度分析:[/bold]\n  {diagnosis.get('bottleneck_analysis')}\n\n"
                 f"[bold]拟建议的第 {self.generation + 1} 代演进架构:[/bold] [yellow]{next_arch.get('name')}[/yellow]\n"

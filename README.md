@@ -67,17 +67,31 @@ llm:
 ```
 > 也可通过系统环境变量设置：`export OPENAI_API_KEY="sk-xxxxxx"`。如果未配置 API Key，系统会自动激活内置高质量科研算法样板，支持零成本离线完整跑通全流程！
 
-### 3. 一键启动全自动科研
+### 3. 一键启动 Web 交互看板（强烈推荐）
 
-运行以下命令，启动一个全自动科研实验：
+运行以下命令，启动现代化科研 Web 看板，系统会自动在浏览器打开操作界面：
 
 ```bash
-python main.py --topic "Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks"
+python run_web.py
 ```
 
-你也可以自定义任何感兴趣的 AI 研究方向，例如：
+- **访问地址**: `http://127.0.0.1:8000`
+- **核心能力**:
+  - **人机协同门禁审批 (Gate 1/2/3)**: 在 Web 界面直观审核课题目标、核验超参、评估模型缺陷诊断与下一代架构决策；
+  - **实时沙箱终端流**: 实时逐行查看 PyTorch/CUDA 训练输出与智能体流转日志；
+  - **代际收敛曲线看板**: 动态折线图直观对比多代架构的 Accuracy、Loss 及训练耗时；
+  - **成果在线排版与导出**: 在线预览生成的学术论文 Markdown、LaTeX 源码与高清图表，支持一键下载 Overleaf 压缩包。
+
+### 4. 终端命令行启动（CLI）
+
+如果你偏好终端纯文本运行，也可通过命令行启动：
+
 ```bash
-python main.py --topic "Attention Regularization with Gradient Harmonization for Transformer Training"
+# 全自动模式
+python main.py --topic "Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks"
+
+# 终端人机协同模式
+python main.py -i --topic "Adaptive Learning Rate and Feature Variance Modulation in Deep Neural Networks"
 ```
 
 ---

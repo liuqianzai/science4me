@@ -380,7 +380,8 @@ class WebSessionRunner:
                     current_generation=self.generation,
                     metrics=metrics,
                     evolution_mgr=evolution_mgr,
-                    target_goal=target_goal
+                    target_goal=target_goal,
+                    topic=self.topic
                 )
 
                 # 检查是否达成最终目标
@@ -400,6 +401,10 @@ class WebSessionRunner:
                     "title": f"人工审核门禁 3：第 {self.generation} 代缺陷诊断与下一代方案审查",
                     "current_generation": self.generation,
                     "current_metric_value": diagnosis.get("current_metric_value", 0.0),
+                    "anchor_baseline_gen": diagnosis.get("anchor_baseline_gen", self.generation),
+                    "anchor_baseline_value": diagnosis.get("anchor_baseline_value", diagnosis.get("current_metric_value", 0.0)),
+                    "is_regression": diagnosis.get("is_regression", False),
+                    "last_resort_activated": diagnosis.get("last_resort_activated", False),
                     "target_goal": target_goal,
                     "is_stagnant": diagnosis.get("is_stagnant", False),
                     "model_flaws": diagnosis.get("model_flaws", []),

@@ -90,6 +90,65 @@ class EvolutionHistoryManager:
         improvements = [values[i] - values[i - 1] for i in range(1, len(values))]
         return all(delta < min_delta for delta in improvements)
 
+    def get_best_generation(
+        self,
+        metric_key: str = "test_accuracy",
+        condition: str = ">="
+    ) -> Optional[Dict[str, Any]]:
+        """
+        保本争优核心：从历史全量演化链中，检索出指标最高（或损失最低）的优胜代条目
+        """
+        if not self.history:
+            return None
+
+        best_entry = None
+        best_val = -float("inf") if condition == ">=" else float("inf")
+
+        for entry in self.history:
+            val = None
+            # 1. 尝试从 results 字典提取针对当前待测架构的指标
+            results = entry.get("metrics", {}).get("results", {})
+            arch_name = entry.get("architecture_name", "")
+            for k, v in results.items():
+                if arch_name in k or "Proposed" in k or f"Gen{entry.get('generation')}" in k or "CurrentGen" in k:
+                    if metric_key in v:
+                        val = float(v[metric_key])
+                        break
+            # 2. 尝试从根指标提取
+            if val is None and metric_key in entry.get("metrics", {}):
+                val = float(entry["metrics"][metric_key])
+
+            if val is not None:
+                is_better = (val > best_val) if condition == ">=" else (val < best_val)
+                if is_better:
+                    best_val = val
+                    best_entry = entry
+
+        if best_entry is not None:
+            # 拷贝一份避免外部篡改，并附带明确的最优数值
+            res_entry = dict(best_entry)
+            res_entry["best_value"] = best_val
+            return res_entry
+
+        return self.history[-1]
+
+    def get_consecutive_non_improving_count(
+        self,
+        metric_key: str = "test_accuracy",
+        condition: str = ">="
+    ) -> int:
+        """
+        计算自历史最高优胜代以来，连续未取得实质超越的代数
+        用于程序化判定是否应激活【最后手段：放宽轻量化约束/增加参数容量换兼容】
+        """
+        best_entry = self.get_best_generation(metric_key=metric_key, condition=condition)
+        if not best_entry:
+            return 0
+
+        best_gen = best_entry.get("generation", 1)
+        latest_gen = self.history[-1].get("generation", 1) if self.history else 1
+        return max(0, latest_gen - best_gen)
+
     def get_latest_generation(self) -> Optional[Dict[str, Any]]:
         return self.history[-1] if self.history else None
 
